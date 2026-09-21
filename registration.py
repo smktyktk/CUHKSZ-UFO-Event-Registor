@@ -25,9 +25,10 @@ LOG_FILE = BASE_DIR / "log.txt"
 REGISTRATION_TIME_COLUMN = 2
 NICKNAME_COLUMN = 7
 STUDENT_ID_COLUMN = 8
-REMARKS_COLUMN = 9
+ATTENDANCE_INTENT_COLUMN = 9
+REMARKS_COLUMN = 10
 
-MINIMUM_COLUMNS = 9
+MINIMUM_COLUMNS = 10
 
 
 # ============================================================
@@ -632,125 +633,78 @@ def load_record():
 def load_registrations(
     input_file
 ):
+    """
+    Load registrations from the WJX file.
 
-    workbook = load_workbook(
-        input_file,
-        data_only=True
-    )
+    WJX columns:
+        2 = registration time
+        7 = nickname
+        8 = student ID
+        9 = attendance intent ("是 Yes" / "否 No")
+        10 = remarks
 
+    Rows with "否 No" in column 9 are removed BEFORE deduplication.
+    This allows a participant to resubmit the questionnaire with
+    "否 No" to withdraw from the event.
+    """
+
+    workbook = load_workbook(input_file, data_only=True)
     worksheet = workbook.active
-
     registrations_by_id = {}
-
     total_rows = 0
+    withdrawn_count = 0
     duplicate_count = 0
 
-    for row in worksheet.iter_rows(
-        min_row=2,
-        values_only=True
-    ):
-
+    for row in worksheet.iter_rows(min_row=2, values_only=True):
         total_rows += 1
-
-        if len(row) < STUDENT_ID_COLUMN:
+        if len(row) < MINIMUM_COLUMNS:
             continue
 
-        student_id = normalize_student_id(
-            row[STUDENT_ID_COLUMN - 1]
-        )
+        attendance_intent = row[ATTENDANCE_INTENT_COLUMN - 1]
+        if (attendance_intent is not None
+                and str(attendance_intent).strip() == "否 No"):
+            withdrawn_count += 1
+            continue
 
+        student_id = normalize_student_id(row[STUDENT_ID_COLUMN - 1])
         if not student_id:
             continue
 
-        nickname = row[
-            NICKNAME_COLUMN - 1
-        ]
-
+        nickname = row[NICKNAME_COLUMN - 1]
         registration_time = parse_registration_time(
-            row[
-                REGISTRATION_TIME_COLUMN - 1
-            ]
+            row[REGISTRATION_TIME_COLUMN - 1]
         )
-
-        remarks = row[
-            REMARKS_COLUMN - 1
-        ]
+        remarks = row[REMARKS_COLUMN - 1]
 
         registration = {
             "student_id": student_id,
             "nickname": nickname,
             "registration_time": registration_time,
-            "remarks": remarks,
-            "original_row": list(row)
+            "remarks": remarks
         }
 
-        # ----------------------------------------------------
-        # DEDUPLICATION
-        # ----------------------------------------------------
-
         if student_id not in registrations_by_id:
-
-            registrations_by_id[
-                student_id
-            ] = registration
-
+            registrations_by_id[student_id] = registration
         else:
-
             duplicate_count += 1
+            existing = registrations_by_id[student_id]
+            old_time = existing["registration_time"]
+            new_time = registration["registration_time"]
 
-            existing = registrations_by_id[
-                student_id
-            ]
-
-            old_time = existing[
-                "registration_time"
-            ]
-
-            new_time = registration[
-                "registration_time"
-            ]
-
-            # Keep earliest registration.
-            if (
-                old_time is None
-                and new_time is not None
-            ):
-
-                registrations_by_id[
-                    student_id
-                ] = registration
-
-            elif (
-                old_time is not None
-                and new_time is not None
-                and new_time < old_time
-            ):
-
-                registrations_by_id[
-                    student_id
-                ] = registration
+            if (old_time is None and new_time is not None):
+                registrations_by_id[student_id] = registration
+            elif (old_time is not None and new_time is not None
+                  and new_time < old_time):
+                registrations_by_id[student_id] = registration
 
     workbook.close()
-
-    registrations = list(
-        registrations_by_id.values()
-    )
+    registrations = list(registrations_by_id.values())
 
     log()
-    log(
-        f"Rows in WJX file: "
-        f"{total_rows}"
-    )
-
-    log(
-        f"Unique student IDs: "
-        f"{len(registrations)}"
-    )
-
-    log(
-        f"Duplicate registrations removed: "
-        f"{duplicate_count}"
-    )
+    log(f"Rows in WJX file: {total_rows}")
+    log(f"Withdrawn registrations removed: {withdrawn_count}")
+    log(f"Unique student IDs: {len(registrations)}")
+    log(f"Duplicate registrations removed: {duplicate_count}")
 
     return registrations
 
@@ -812,7 +766,7 @@ def save_participant_list(
     Column 2 = student ID
     Column 3 = remarks
 
-    The remarks are taken from column 9 of the downloaded WJX file.
+    The remarks are taken from column 10 of the downloaded WJX file.
     """
 
     from openpyxl import Workbook
